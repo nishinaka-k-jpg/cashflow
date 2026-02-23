@@ -1,0 +1,473 @@
+import { useState } from "react";
+
+// 差額自動計算する項目
+const diffItems = [
+  { id: "ar",  label: "売掛金",   sign: -1, hint: "増加はマイナス" },
+  { id: "inv", label: "棚卸資産", sign: -1, hint: "増加はマイナス" },
+  { id: "ap",  label: "買掛金",   sign:  1, hint: "増加はプラス" },
+];
+
+const sections = [
+  {
+    id: "operating", label: "Ⅰ．営業活動によるキャッシュフロー",
+    color: "bg-blue-600", bg: "bg-blue-50",
+    items: [
+      { id: "net_income",      label: "税引前当期純利益", sign: 1 },
+      { id: "depreciation",    label: "減価償却費",       sign: 1 },
+      { id: "tax_paid",        label: "法人税等の支払額", sign: -1 },
+      { id: "other_operating", label: "その他（営業）",   sign: 1 },
+    ],
+  },
+  {
+    id: "investing", label: "Ⅱ．投資活動によるキャッシュフロー",
+    color: "bg-green-600", bg: "bg-green-50",
+    items: [
+      { id: "capex",           label: "有形固定資産の取得（マイナス入力）",   sign: 1 },
+      { id: "asset_sale",      label: "有形固定資産の売却",                   sign: 1 },
+      { id: "investment_buy",  label: "投資有価証券の取得（マイナス入力）",   sign: 1 },
+      { id: "investment_sell", label: "投資有価証券の売却",                   sign: 1 },
+      { id: "other_investing", label: "その他（投資）",                       sign: 1 },
+    ],
+  },
+  {
+    id: "financing", label: "Ⅲ．財務活動によるキャッシュフロー",
+    color: "bg-purple-600", bg: "bg-purple-50",
+    items: [
+      { id: "dividend",        label: "配当金の支払額（マイナス入力）", sign: 1 },
+      { id: "treasury_stock",  label: "自社株取得（マイナス入力）",     sign: 1 },
+      { id: "lease_payment",   label: "リース債務の返済（マイナス入力）", sign: 1 },
+      { id: "other_financing", label: "その他（財務）",                 sign: 1 },
+    ],
+  },
+];
+
+const parseNum = (s) => { const n = parseFloat(String(s ?? "").replace(/,/g, "")); return isNaN(n) ? 0 : n; };
+const fmt = (v) => Number(v).toLocaleString("ja-JP");
+const colorClass = (v) => v > 0 ? "text-blue-700 font-bold" : v < 0 ? "text-red-600 font-bold" : "text-gray-700 font-bold";
+
+function NumInput({ value, onChange, placeholder = "0", className = "" }) {
+  const [focused, setFocused] = useState(false);
+  const raw = String(value ?? "");
+  const display = focused ? raw : (raw === "" || raw === "-") ? raw : (isNaN(parseFloat(raw.replace(/,/g,""))) ? raw : parseFloat(raw.replace(/,/g,"")).toLocaleString("ja-JP"));
+  return (
+    <input type="text" inputMode="numeric"
+      className={`border rounded px-2 py-1 w-full text-right text-sm ${className}`}
+      value={display} placeholder={placeholder}
+      onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      onChange={e => { const v = e.target.value.replace(/,/g,""); if (v===""||v==="-"||/^-?\d*\.?\d*$/.test(v)) onChange(v); }}
+    />
+  );
+}
+
+function analyze({ opTotal, invTotal, cashEnd, values, diffVals }) {
+  const fcf = opTotal + invTotal;
+  const netIncome = parseNum(values.net_income);
+  const arDiff   = (parseNum(diffVals.ar_curr)  - parseNum(diffVals.ar_prev))  * -1;
+  const invDiff  = (parseNum(diffVals.inv_curr) - parseNum(diffVals.inv_prev)) * -1;
+  const monthlyRevenue = parseNum(values.monthly_revenue);
+  const comments = [];
+
+  if (opTotal > 0) {
+    if (netIncome > 0 && opTotal >= netIncome)
+      comments.push({ level: "good", title: "営業CF：優良", body: `本業で${fmt(opTotal)}円のキャッシュを創出しており、利益をしっかり現金化できています。` });
+    else if (netIncome > 0 && opTotal < netIncome)
+      comments.push({ level: "warn", title: "営業CF：要注意（利益との乖離）", body: `利益（${fmt(netIncome)}円）に対して営業CF（${fmt(opTotal)}円）が低くなっています。売掛金の回収遅れや在庫増加が原因の可能性があります。` });
+    else
+      comments.push({ level: "good", title: "営業CF：プラス", body: `営業活動で${fmt(opTotal)}円のキャッシュを確保できています。` });
+  } else {
+    comments.push({ level: "bad", title: "営業CF：危険（マイナス）", body: `本業でキャッシュが${fmt(opTotal)}円流出しています。収益構造の見直しが急務です。` });
+  }
+
+  if (arDiff < 0)  comments.push({ level: "warn", title: "売掛金が増加", body: `売掛金が${fmt(Math.abs(arDiff))}円増加しています。回収サイクルの確認と督促強化を検討してください。` });
+  if (invDiff < 0) comments.push({ level: "warn", title: "棚卸資産が増加", body: `在庫が${fmt(Math.abs(invDiff))}円増加しています。過剰在庫になっていないか確認が必要です。` });
+
+  if (fcf > 0)
+    comments.push({ level: "good", title: "フリーCF：プラス（健全）", body: `FCFは${fmt(fcf)}円のプラスです。投資を行いながらも余剰キャッシュが生まれており、財務的に安定した状態です。` });
+  else if (fcf < 0 && opTotal > 0)
+    comments.push({ level: "info", title: "フリーCF：マイナス（積極投資中）", body: `FCFは${fmt(fcf)}円のマイナスですが、営業CFはプラスのため投資先行の状態です。投資効果の検証を継続してください。` });
+  else
+    comments.push({ level: "bad", title: "フリーCF：要警戒", body: `営業CF・投資CF共にマイナスで、FCFは${fmt(fcf)}円です。資金の調達手段を早急に検討する必要があります。` });
+
+  if (monthlyRevenue > 0) {
+    const months = cashEnd / monthlyRevenue;
+    if (months >= 3 && months <= 6)
+      comments.push({ level: "good", title: "現金残高：適正水準", body: `期末現金残高は月商の約${months.toFixed(1)}ヶ月分（${fmt(cashEnd)}円）で、推奨水準（3〜6ヶ月）内です。` });
+    else if (months < 3)
+      comments.push({ level: "bad",  title: "現金残高：不足気味", body: `期末現金残高は月商の約${months.toFixed(1)}ヶ月分です。緊急時の備えとして最低3ヶ月分の確保を推奨します。` });
+    else
+      comments.push({ level: "info", title: "現金残高：余剰あり", body: `期末現金残高は月商の約${months.toFixed(1)}ヶ月分と潤沢です。追加投資や株主還元の検討余地があります。` });
+  }
+
+  const goodCount = [opTotal > 0, fcf > 0, cashEnd > 0].filter(Boolean).length;
+  if (goodCount === 3) comments.push({ level: "good", title: "総合判定：優良", body: "営業CF・FCF・現金残高の全てが健全な水準です。現在の経営状態を維持しつつ、成長投資のタイミングを検討できる局面です。" });
+  else if (goodCount === 2) comments.push({ level: "warn", title: "総合判定：概ね良好・一部要注意", body: "全体的には安定していますが、一部に改善余地があります。上記の警告項目を重点的に対策してください。" });
+  else comments.push({ level: "bad", title: "総合判定：要改善", body: "複数の指標で問題が見られます。経営会議で優先課題を整理し、早期対策を講じることを推奨します。" });
+
+  let scoreOp=0, scoreFcf=0, scoreAr=0, scoreInv=0, scoreCash=0;
+  if (opTotal > 0) { if (netIncome > 0 && opTotal >= netIncome) scoreOp=30; else scoreOp=20; }
+  if (fcf > 0) scoreFcf=30; else if (fcf < 0 && opTotal > 0) scoreFcf=10;
+  if (arDiff >= 0)  scoreAr=20;
+  if (invDiff >= 0) scoreInv=10;
+  if (monthlyRevenue > 0) { const m=cashEnd/monthlyRevenue; if(m>=3&&m<=6) scoreCash=10; else if(m>=1) scoreCash=5; } else if (cashEnd>0) scoreCash=5;
+  const score = scoreOp+scoreFcf+scoreAr+scoreInv+scoreCash;
+  const breakdown = [
+    { label:"営業CF",   got:scoreOp,   max:30 },
+    { label:"フリーCF", got:scoreFcf,  max:30 },
+    { label:"売掛金",   got:scoreAr,   max:20 },
+    { label:"棚卸資産", got:scoreInv,  max:10 },
+    { label:"現金残高", got:scoreCash, max:10 },
+  ];
+  return { comments, fcf, score, breakdown };
+}
+
+const levelStyle = {
+  good: { bg:"bg-green-50 border-green-300", icon:"✅", title:"text-green-700" },
+  warn: { bg:"bg-yellow-50 border-yellow-300", icon:"⚠️", title:"text-yellow-700" },
+  bad:  { bg:"bg-red-50 border-red-300", icon:"🔴", title:"text-red-700" },
+  info: { bg:"bg-blue-50 border-blue-300", icon:"💡", title:"text-blue-700" },
+};
+
+const scoreBreakdownDef = [
+  { item:"営業CF", max:"30点", rules:[{pt:"30点",cond:"プラスかつ利益以上のCFを確保"},{pt:"20点",cond:"プラスだが利益を下回っている"},{pt:"0点",cond:"マイナス（本業でキャッシュが流出）"}]},
+  { item:"フリーCF", max:"30点", rules:[{pt:"30点",cond:"プラス（投資後も余剰キャッシュあり）"},{pt:"10点",cond:"マイナスだが営業CFはプラス（投資先行）"},{pt:"0点",cond:"営業CF・投資CF共にマイナス"}]},
+  { item:"売掛金", max:"20点", rules:[{pt:"20点",cond:"前期比で増加していない（回収良好）"},{pt:"0点",cond:"前期比で増加している（回収遅れの可能性）"}]},
+  { item:"棚卸資産（在庫）", max:"10点", rules:[{pt:"10点",cond:"前期比で増加していない（適正在庫）"},{pt:"0点",cond:"前期比で増加している（過剰在庫の可能性）"}]},
+  { item:"現金残高", max:"10点", rules:[{pt:"10点",cond:"月商の3〜6ヶ月分（適正水準）"},{pt:"5点",cond:"月商の1〜3ヶ月分または6ヶ月超"},{pt:"0点",cond:"月商1ヶ月分未満（不足）"}]},
+];
+
+export default function App() {
+  const [companyName, setCompanyName] = useState("株式会社○○");
+  const [period, setPeriod]           = useState("2024年4月〜2025年3月");
+  const [cashStart, setCashStart]     = useState("");
+  const [values, setValues]           = useState({});
+  const [diffVals, setDiffVals]       = useState({});
+  const [tab, setTab]                 = useState("input");
+
+  const set     = (id, v) => setValues(p => ({ ...p, [id]: v }));
+  const setDiff = (id, v) => setDiffVals(p => ({ ...p, [id]: v }));
+
+  // 差額計算（今期 - 前期）× sign
+  const diffResult = (item) => {
+    const prev = parseNum(diffVals[`${item.id}_prev`]);
+    const curr = parseNum(diffVals[`${item.id}_curr`]);
+    return (curr - prev) * item.sign;
+  };
+
+  const sectionTotal = (sec) => sec.items.reduce((sum, item) => sum + parseNum(values[item.id]) * item.sign, 0);
+  const diffTotal    = diffItems.reduce((sum, item) => sum + diffResult(item), 0);
+  const opTotal      = sectionTotal(sections[0]) + diffTotal;
+  const invTotal     = sectionTotal(sections[1]);
+  const finTotal     = sectionTotal(sections[2]);
+  const netChange    = opTotal + invTotal + finTotal;
+  const cashEnd      = parseNum(cashStart) + netChange;
+
+  const { comments, fcf, score, breakdown } = analyze({ opTotal, invTotal, cashEnd, values, diffVals });
+
+  const exportPDF = () => {
+    const w = window.open("", "_blank");
+    const sCol = ["#1d4ed8","#16a34a","#7c3aed"];
+    const sBg  = ["#eff6ff","#f0fdf4","#faf5ff"];
+    const lCol = { good:"#f0fdf4", warn:"#fefce8", bad:"#fef2f2", info:"#eff6ff" };
+    const lBd  = { good:"#86efac", warn:"#fde047", bad:"#fca5a5", info:"#93c5fd" };
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>キャッシュフロー計算書</title>
+    <style>body{font-family:"Hiragino Kaku Gothic Pro",Meiryo,sans-serif;font-size:12px;color:#1f2937;padding:30px;}
+    h1{text-align:center;font-size:16px;margin-bottom:4px;}h2{font-size:13px;margin:20px 0 8px;}
+    .meta{text-align:center;color:#6b7280;margin-bottom:20px;font-size:11px;}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px;}
+    th{color:white;padding:6px 10px;text-align:left;font-size:11px;}
+    td{padding:5px 10px;border-bottom:1px solid #e5e7eb;}td.r{text-align:right;}
+    .sub td{font-weight:bold;}.hl td{background:#fefce8;font-weight:bold;}.fin td{background:#f3f4f6;font-weight:bold;}
+    .pos{color:#1d4ed8;}.neg{color:#dc2626;}
+    .comment{border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid;}
+    .ct{font-weight:bold;margin-bottom:4px;}
+    .sb{text-align:center;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:20px;}
+    @media print{button{display:none;}}</style></head><body>`;
+    html += `<h1>キャッシュフロー計算書</h1><div class="meta">${companyName}　対象期間：${period}</div>`;
+    // 営業CF
+    html += `<table><thead><tr><th colspan="2" style="background:${sCol[0]}">${sections[0].label}</th></tr></thead><tbody>`;
+    sections[0].items.forEach(item => {
+      const v = parseNum(values[item.id]) * item.sign;
+      html += `<tr><td>${item.label}</td><td class="r ${v>0?"pos":v<0?"neg":""}">${v!==0?fmt(v)+" 円":"―"}</td></tr>`;
+    });
+    diffItems.forEach(item => {
+      const v = diffResult(item);
+      html += `<tr><td>${item.label}の増減額</td><td class="r ${v>0?"pos":v<0?"neg":""}">${v!==0?fmt(v)+" 円":"―"}</td></tr>`;
+    });
+    html += `<tr class="sub" style="background:${sBg[0]}"><td>小計</td><td class="r ${opTotal>0?"pos":opTotal<0?"neg":""}">${fmt(opTotal)} 円</td></tr></tbody></table>`;
+    // 投資・財務CF
+    [1,2].forEach(si => {
+      html += `<table><thead><tr><th colspan="2" style="background:${sCol[si]}">${sections[si].label}</th></tr></thead><tbody>`;
+      sections[si].items.forEach(item => {
+        const v = parseNum(values[item.id]) * item.sign;
+        html += `<tr><td>${item.label}</td><td class="r ${v>0?"pos":v<0?"neg":""}">${v!==0?fmt(v)+" 円":"―"}</td></tr>`;
+      });
+      const t = sectionTotal(sections[si]);
+      html += `<tr class="sub" style="background:${sBg[si]}"><td>小計</td><td class="r ${t>0?"pos":t<0?"neg":""}">${fmt(t)} 円</td></tr></tbody></table>`;
+    });
+    html += `<table><thead><tr><th colspan="2" style="background:#374151">Ⅳ．現金・預金残高</th></tr></thead><tbody>`;
+    html += `<tr><td>期首現金・預金残高</td><td class="r">${fmt(parseNum(cashStart))} 円</td></tr>`;
+    html += `<tr class="hl"><td>キャッシュフロー増減額合計</td><td class="r ${netChange>0?"pos":netChange<0?"neg":""}">${fmt(netChange)} 円</td></tr>`;
+    html += `<tr class="fin"><td>期末現金・預金残高</td><td class="r ${cashEnd>0?"pos":cashEnd<0?"neg":""}">${fmt(cashEnd)} 円</td></tr></tbody></table>`;
+    const sc = score>=80?"#1d4ed8":score>=50?"#ca8a04":"#dc2626";
+    html += `<div class="sb"><div style="font-size:11px;color:#6b7280;">総合スコア</div>
+      <div style="font-size:40px;font-weight:bold;color:${sc}">${score}<span style="font-size:18px;color:#9ca3af">/100</span></div>
+      <div style="font-weight:bold;color:${sc}">${score>=80?"優良：健全な財務状態です":score>=50?"普通：一部に改善余地があります":"要改善：早急な対策が必要です"}</div></div>`;
+    html += `<h2>■ 経営分析コメント</h2>`;
+    comments.forEach(c => {
+      html += `<div class="comment" style="background:${lCol[c.level]};border-color:${lBd[c.level]}"><div class="ct">${c.title}</div><div>${c.body}</div></div>`;
+    });
+    html += `<script>window.onload=()=>window.print();<\/script></body></html>`;
+    w.document.write(html); w.document.close();
+  };
+
+  const exportCSV = () => {
+    const rows = [];
+    rows.push(["キャッシュフロー計算書"],[companyName],[`対象期間：${period}`],[]);
+    rows.push([sections[0].label]);
+    sections[0].items.forEach(item => { const v=parseNum(values[item.id])*item.sign; rows.push(["",item.label,v!==0?v:""]); });
+    diffItems.forEach(item => { const v=diffResult(item); rows.push(["",`${item.label}の増減額`,v!==0?v:""]); });
+    rows.push(["","小計",opTotal],[]);
+    [1,2].forEach(si => {
+      rows.push([sections[si].label]);
+      sections[si].items.forEach(item => { const v=parseNum(values[item.id])*item.sign; rows.push(["",item.label,v!==0?v:""]); });
+      rows.push(["","小計",sectionTotal(sections[si])]); rows.push([]);
+    });
+    rows.push(["キャッシュフロー増減額合計","",netChange],["期首現金・預金残高","",parseNum(cashStart)],["期末現金・預金残高","",cashEnd],[]);
+    rows.push([`総合スコア：${score}/100`],["■経営分析コメント"]);
+    comments.forEach(c => rows.push([c.title,c.body]));
+    const csv = rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+    const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`CF計算書_${companyName}.csv`; a.click();
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 font-sans text-sm">
+      <h1 className="text-xl font-bold text-center mb-4 text-gray-800">キャッシュフロー計算書</h1>
+
+      <div className="flex mb-4 border-b">
+        {[["input","入力・集計"],["analysis","経営分析"],["scoring","スコアの内訳"]].map(([id,label]) => (
+          <button key={id} onClick={()=>setTab(id)}
+            className={`px-4 py-2 text-sm font-bold border-b-2 -mb-px ${tab===id?"border-blue-600 text-blue-600":"border-transparent text-gray-500 hover:text-gray-700"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "input" && (
+        <>
+          {/* ヘッダー */}
+          <div className="bg-gray-50 border rounded p-3 mb-4 grid grid-cols-2 gap-3">
+            <div><label className="block text-xs text-gray-500 mb-1">会社名</label>
+              <input className="border rounded px-2 py-1 w-full text-sm" value={companyName} onChange={e=>setCompanyName(e.target.value)} /></div>
+            <div><label className="block text-xs text-gray-500 mb-1">対象期間</label>
+              <input className="border rounded px-2 py-1 w-full text-sm" value={period} onChange={e=>setPeriod(e.target.value)} /></div>
+            <div><label className="block text-xs text-gray-500 mb-1">月商（分析用・任意）</label>
+              <NumInput value={values.monthly_revenue} onChange={v=>set("monthly_revenue",v)} placeholder="例：10,000,000" /></div>
+          </div>
+
+          {/* 営業CF */}
+          <div className="mb-4 border rounded overflow-hidden">
+            <div className="px-3 py-2 font-bold text-white text-xs bg-blue-600">{sections[0].label}</div>
+            <table className="w-full">
+              <tbody>
+                {sections[0].items.map(item => (
+                  <tr key={item.id} className="border-b hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-700 w-3/5">{item.label}</td>
+                    <td className="px-3 py-2 w-2/5"><NumInput value={values[item.id]} onChange={v=>set(item.id,v)} /></td>
+                  </tr>
+                ))}
+
+                {/* 前期・今期入力行 */}
+                {diffItems.map(item => {
+                  const diff = diffResult(item);
+                  return (
+                    <tr key={item.id} className="border-b bg-blue-50">
+                      <td className="px-3 py-2" colSpan={2}>
+                        <div className="flex items-center gap-1 mb-1">
+                          <span className="text-gray-700 font-medium">{item.label}</span>
+                          <span className="text-xs text-gray-400">（{item.hint}）</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 items-center">
+                          <div>
+                            <div className="text-xs text-gray-500 mb-0.5">前期残高</div>
+                            <NumInput value={diffVals[`${item.id}_prev`]} onChange={v=>setDiff(`${item.id}_prev`,v)} placeholder="0" />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-0.5">今期残高</div>
+                            <NumInput value={diffVals[`${item.id}_curr`]} onChange={v=>setDiff(`${item.id}_curr`,v)} placeholder="0" />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-0.5">増減額（自動）</div>
+                            <div className={`border rounded px-2 py-1 text-right text-sm bg-gray-100 ${colorClass(diff)}`}>
+                              {fmt(diff)} 円
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                <tr className="bg-blue-50">
+                  <td className="px-3 py-2 font-bold">小計</td>
+                  <td className={`px-3 py-2 text-right font-bold ${colorClass(opTotal)}`}>{fmt(opTotal)} 円</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* 投資・財務CF */}
+          {[1,2].map(si => (
+            <div key={sections[si].id} className="mb-4 border rounded overflow-hidden">
+              <div className={`px-3 py-2 font-bold text-white text-xs ${sections[si].color}`}>{sections[si].label}</div>
+              <table className="w-full">
+                <tbody>
+                  {sections[si].items.map(item => (
+                    <tr key={item.id} className="border-b hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-700 w-3/5">{item.label}</td>
+                      <td className="px-3 py-2 w-2/5"><NumInput value={values[item.id]} onChange={v=>set(item.id,v)} /></td>
+                    </tr>
+                  ))}
+                  <tr className={sections[si].bg}>
+                    <td className="px-3 py-2 font-bold">小計</td>
+                    <td className={`px-3 py-2 text-right font-bold ${colorClass(sectionTotal(sections[si]))}`}>{fmt(sectionTotal(sections[si]))} 円</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          ))}
+
+          {/* 残高 */}
+          <div className="border rounded overflow-hidden mb-4">
+            <div className="bg-gray-700 px-3 py-2 font-bold text-white text-xs">Ⅳ．現金・預金残高</div>
+            <table className="w-full">
+              <tbody>
+                <tr className="border-b">
+                  <td className="px-3 py-2 text-gray-700 w-3/5">期首現金・預金残高</td>
+                  <td className="px-3 py-2 w-2/5"><NumInput value={cashStart} onChange={v=>setCashStart(v)} /></td>
+                </tr>
+                <tr className="border-b bg-yellow-50">
+                  <td className="px-3 py-2 font-bold">キャッシュフロー増減額合計</td>
+                  <td className={`px-3 py-2 text-right ${colorClass(netChange)}`}>{fmt(netChange)} 円</td>
+                </tr>
+                <tr className="bg-gray-100">
+                  <td className="px-3 py-2 font-bold">期末現金・預金残高</td>
+                  <td className={`px-3 py-2 text-right ${colorClass(cashEnd)}`}>{fmt(cashEnd)} 円</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <button onClick={exportCSV} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded text-sm">CSVダウンロード（Excel対応）</button>
+          <button onClick={exportPDF} className="w-full mt-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded text-sm">PDFで印刷・保存（分析コメント含む）</button>
+          <p className="text-xs text-gray-400 text-center mt-2">PDFは印刷ダイアログで「PDFとして保存」を選択してください</p>
+        </>
+      )}
+
+      {tab === "analysis" && (
+        <div>
+          <div className="border rounded p-4 mb-5 bg-white shadow-sm text-center">
+            <div className="text-xs text-gray-500 mb-1">総合スコア</div>
+            <div className={`text-5xl font-bold mb-1 ${score>=80?"text-blue-600":score>=50?"text-yellow-500":"text-red-500"}`}>
+              {score}<span className="text-2xl text-gray-400">/100</span>
+            </div>
+            <div className="flex justify-center gap-0.5 mb-2">
+              {Array.from({length:20}).map((_,i) => (
+                <div key={i} className={`h-3 w-4 rounded-sm ${i<Math.round(score/5)?(score>=80?"bg-blue-500":score>=50?"bg-yellow-400":"bg-red-400"):"bg-gray-200"}`} />
+              ))}
+            </div>
+            <div className={`text-sm font-bold ${score>=80?"text-blue-600":score>=50?"text-yellow-600":"text-red-600"}`}>
+              {score>=80?"優良：健全な財務状態です":score>=50?"普通：一部に改善余地があります":"要改善：早急な対策が必要です"}
+            </div>
+            <div className="text-xs text-gray-400 mt-1">営業CF(30点) ／ フリーCF(30点) ／ 売掛金(20点) ／ 在庫(10点) ／ 現金残高(10点)</div>
+          </div>
+
+          <div className="border rounded overflow-hidden mb-5">
+            <div className="bg-gray-700 px-3 py-2 text-white text-xs font-bold">項目別スコア</div>
+            <table className="w-full">
+              <tbody>
+                {breakdown.map(({label,got,max}) => {
+                  const pct = max>0?(got/max)*100:0;
+                  const bar = pct===100?"bg-blue-500":pct>=50?"bg-yellow-400":"bg-red-400";
+                  return (
+                    <tr key={label} className="border-b last:border-0">
+                      <td className="px-3 py-2 text-gray-700 w-24 whitespace-nowrap">{label}</td>
+                      <td className="px-3 py-2 w-full">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-gray-100 rounded-full h-3">
+                            <div className={`${bar} h-3 rounded-full`} style={{width:`${pct}%`}} />
+                          </div>
+                          <span className={`text-sm font-bold whitespace-nowrap w-16 text-right ${pct===100?"text-blue-600":pct>=50?"text-yellow-600":"text-red-500"}`}>
+                            {got} / {max}点
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            {[{label:"営業CF",value:opTotal},{label:"フリーCF",value:fcf},{label:"期末現金残高",value:cashEnd}].map(({label,value}) => (
+              <div key={label} className="border rounded p-3 text-center bg-white shadow-sm">
+                <div className="text-xs text-gray-500 mb-1">{label}</div>
+                <div className={`text-base font-bold ${value>0?"text-blue-600":value<0?"text-red-600":"text-gray-600"}`}>
+                  {fmt(value)}<span className="text-xs ml-1">円</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <h2 className="font-bold text-gray-700 mb-3">経営分析コメント</h2>
+          {comments.map((c,i) => {
+            const s = levelStyle[c.level];
+            return (
+              <div key={i} className={`border rounded p-3 mb-3 ${s.bg}`}>
+                <div className={`font-bold mb-1 ${s.title}`}>{s.icon} {c.title}</div>
+                <div className="text-gray-700 leading-relaxed">{c.body}</div>
+              </div>
+            );
+          })}
+          <button onClick={exportPDF} className="w-full mt-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded text-sm">PDFで印刷・保存（分析コメント含む）</button>
+        </div>
+      )}
+
+      {tab === "scoring" && (
+        <div>
+          <h2 className="font-bold text-gray-700 mb-3">スコアの内訳（100点満点）</h2>
+          <table className="w-full border rounded overflow-hidden mb-4 text-sm">
+            <thead>
+              <tr className="bg-gray-700 text-white">
+                <th className="px-3 py-2 text-left">項目</th>
+                <th className="px-3 py-2 text-center whitespace-nowrap">点数</th>
+                <th className="px-3 py-2 text-left">判定基準</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scoreBreakdownDef.map((row,ri) =>
+                row.rules.map((r,i) => (
+                  <tr key={`${ri}-${i}`} className={`border-t ${i===0?"border-gray-300 bg-gray-50":"border-gray-100"}`}>
+                    {i===0 && <td className="px-3 py-2 font-bold align-top" rowSpan={row.rules.length}>{row.item}<br/><span className="text-xs text-gray-400 font-normal">満点：{row.max}</span></td>}
+                    <td className="px-3 py-2 text-center font-bold text-blue-600 whitespace-nowrap">{r.pt}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.cond}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+          <div className="border rounded p-3 bg-gray-50 text-sm text-gray-600">
+            <p className="font-bold mb-2">総合判定の目安</p>
+            <div className="flex gap-4">
+              <span className="text-blue-600 font-bold">80点以上：優良</span>
+              <span className="text-yellow-600 font-bold">50〜79点：普通</span>
+              <span className="text-red-600 font-bold">49点以下：要改善</span>
+            </div>
+            <p className="mt-2 text-xs text-gray-400">※現金残高のスコアは月商を入力した場合に反映されます</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
